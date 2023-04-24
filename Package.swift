@@ -21,7 +21,12 @@ let package = Package(
         // Targets can depend on other targets in this package, and on products in packages this package depends on.
         .target(
             name: "KYAlgorithms",
-            dependencies: []),
+            dependencies: [],
+            swiftSettings: [
+                .define("ACCELERATE_NEW_LAPACK"),
+                .define("ACCELERATE_LAPACK_ILP64")
+            ]
+        ),
         .testTarget(
             name: "KYAlgorithmsTests",
             dependencies: ["KYAlgorithms"],

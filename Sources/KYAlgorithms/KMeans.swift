@@ -12,10 +12,24 @@ public struct KMeans {
     public let numClusters: Int
     public let numDimensions: Int
 
-    public struct FitResult {
-        let centroids: [[Float]]
-        let numIterations: Int
-        let inertia: Float
+    public struct FitResult: FittedModel {
+        let kmeans: KMeans
+        public let centroids: [[Float]]
+        public let numIterations: Int
+        public let inertia: Float
+        let assignedValues: [Int]
+
+        public func predictedValues() -> [Int] {
+            assignedValues
+        }
+        
+        public func predict(numValues: Int, data: [Float]) -> [Int] {
+            var result = [Int](unsafeUninitializedCapacity: numValues) { buffer, initializedCount in
+                initializedCount = numValues
+            }
+            kmeans.assignValues(numValues: numValues, data: data, centroids: centroids, assignedValues: &result)
+            return result
+        }
     }
 
     public init(numClusters: Int, numDimensions: Int) {
@@ -34,12 +48,12 @@ public struct KMeans {
             let newCentroids = recalculateCentroids(numValues: numValues, data: data, centroids: centroids, assignations: assignedValues)
             if centroids == newCentroids {
                 let inertia = calculateInertia(numValues: numValues, data: data, centroids: centroids, assignedValues: assignedValues)
-                return .init(centroids: newCentroids, numIterations: currentIteration, inertia: inertia)
+                return .init(kmeans: self, centroids: newCentroids, numIterations: currentIteration, inertia: inertia, assignedValues: assignedValues)
             }
             let error = calculateError(previousCentroids: centroids, centroids: newCentroids)
             if error < adaptedTolerance {
                 let inertia = calculateInertia(numValues: numValues, data: data, centroids: newCentroids, assignedValues: assignedValues)
-                return .init(centroids: newCentroids, numIterations: currentIteration, inertia: inertia)
+                return .init(kmeans: self, centroids: newCentroids, numIterations: currentIteration, inertia: inertia, assignedValues: assignedValues)
             }
             centroids = newCentroids
             if verbose {
@@ -48,7 +62,7 @@ public struct KMeans {
             }
         }
         let inertia = calculateInertia(numValues: numValues, data: data, centroids: centroids, assignedValues: assignedValues)
-        return .init(centroids: centroids, numIterations: maxIterations, inertia: inertia)
+        return .init(kmeans: self, centroids: centroids, numIterations: maxIterations, inertia: inertia, assignedValues: assignedValues)
     }
 
     public func dataVariance(numValues: Int, data: [Float]) -> Float {
