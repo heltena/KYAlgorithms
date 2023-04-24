@@ -32,18 +32,25 @@ public struct KMeans {
         }
     }
 
-    public init(numClusters: Int, numDimensions: Int) {
+    public init(numClusters: Int, numDimensions: Int) throws {
+        guard numClusters > 0 else { throw ClusteringError.inputParameter("numClusters") }
+        guard numDimensions > 0 else { throw ClusteringError.inputParameter("numDimensions") }
         self.numClusters = numClusters
         self.numDimensions = numDimensions
     }
     
-    public func fit(numValues: Int, data: [Float], maxIterations: Int = 300, tolerance: Float = 1e-4, verbose: Bool = false) -> FitResult {
+    public func fit(numValues: Int, data: [Float], maxIterations: Int = 300, tolerance: Float = 1e-4, verbose: Bool = false) async throws -> FitResult {
+        guard numValues > 0 else { throw ClusteringError.inputParameter("numValues") }
+        guard data.count >= numValues * numDimensions else { throw ClusteringError.inputParameter("data count") }
+        guard maxIterations > 0 else { throw ClusteringError.inputParameter("maxIterations") }
+    
         let adaptedTolerance = dataVariance(numValues: numValues, data: data) * tolerance
         var assignedValues = [Int](unsafeUninitializedCapacity: numValues) { buffer, initializedCount in
             initializedCount = numValues
         }
         var centroids = kmeansPlusPlus(numValues: numValues, data: data)
         for currentIteration in 0..<maxIterations {
+            try Task.checkCancellation()
             assignValues(numValues: numValues, data: data, centroids: centroids, assignedValues: &assignedValues)
             let newCentroids = recalculateCentroids(numValues: numValues, data: data, centroids: centroids, assignations: assignedValues)
             if centroids == newCentroids {

@@ -53,25 +53,32 @@ public struct GaussianMixture {
             assignedValues
         }
         
-        public func predict(numValues: Int, data: [Float]) -> [Int] {
+        public func predict(numValues: Int, data: [Float]) throws -> [Int] {
             let squaredData = vDSP.square(data)
-            let (_, logResp) = gmm.eStep(numValues: numValues, data: data, squaredData: squaredData, parameters: parameters)
+            let (_, logResp) = try gmm.eStep(numValues: numValues, data: data, squaredData: squaredData, parameters: parameters)
             return (0..<numValues).map {
                 Int(vDSP.indexOfMaximum(logResp[$0 * gmm.numClusters..<($0 + 1) * gmm.numClusters]).0)
             }
         }
     }
 
-    public init(numClusters: Int, numDimensions: Int) {
+    public init(numClusters: Int, numDimensions: Int) throws {
+        guard numClusters > 0 else { throw ClusteringError.inputParameter("numClusters") }
+        guard numDimensions > 0 else { throw ClusteringError.inputParameter("numDimensions") }
         self.numClusters = numClusters
         self.numDimensions = numDimensions
     }
    
-    public func fit(numValues: Int, data: [Float], repetitions: Int = 1, maxIterations: Int = 100, tolerance: Float = 1e-3, verbose: Bool = false) -> FitResult {
+    public func fit(numValues: Int, data: [Float], repetitions: Int = 1, maxIterations: Int = 100, tolerance: Float = 1e-3, verbose: Bool = false) async throws -> FitResult {
+        guard numValues > 0 else { throw ClusteringError.inputParameter("numValues") }
+        guard data.count >= numValues * numDimensions else { throw ClusteringError.inputParameter("data count") }
+        guard repetitions > 0 else { throw ClusteringError.inputParameter("repetitions") }
+        guard maxIterations > 0 else { throw ClusteringError.inputParameter("maxIterations") }
+
         var bestResult: FitResult?
         let squaredData = vDSP.square(data)
         for _ in 0..<repetitions {
-            let result = singleFit(numValues: numValues, data: data, squaredData: squaredData, maxIterations: maxIterations, tolerance: tolerance, verbose: verbose)
+            let result = try await singleFit(numValues: numValues, data: data, squaredData: squaredData, maxIterations: maxIterations, tolerance: tolerance, verbose: verbose)
             if let previousResult = bestResult {
                 if previousResult.lowerBound < result.lowerBound {
                     bestResult = result
@@ -83,26 +90,27 @@ public struct GaussianMixture {
         return bestResult!
     }
 
-    func singleFit(numValues: Int, data: [Float], squaredData: [Float], maxIterations: Int = 100, tolerance: Float = 1e-3, regCovar: Float = 1e-6, verbose: Bool = false) -> FitResult {
-        let kmeans = KMeans(numClusters: numClusters, numDimensions: numDimensions)
-        let initialFit = kmeans.fit(numValues: numValues, data: data)
+    func singleFit(numValues: Int, data: [Float], squaredData: [Float], maxIterations: Int = 100, tolerance: Float = 1e-3, regCovar: Float = 1e-6, verbose: Bool = false) async throws -> FitResult {
+        let kmeans = try KMeans(numClusters: numClusters, numDimensions: numDimensions)
+        let initialFit = try await kmeans.fit(numValues: numValues, data: data)
         var resp = Array(repeating: Float(0), count: numValues * numClusters)
         for (value, cluster) in initialFit.assignedValues.enumerated() {
             resp[value * numClusters + cluster] = 1.0
         }
 
-        var parameters = estimateGaussianParameters(numValues: numValues, data: data, resp: resp, regCovar: regCovar)
+        var parameters = try estimateGaussianParameters(numValues: numValues, data: data, resp: resp, regCovar: regCovar)
 
         var converged = false
         var lowerBound = -Float.infinity
         var iteration = 0
         while !converged && iteration < maxIterations {
+            try Task.checkCancellation()
             let prevLowerBound = lowerBound
-            let (logProbNorm, logResp) = eStep(numValues: numValues, data: data, squaredData: squaredData, parameters: parameters)
+            let (logProbNorm, logResp) = try eStep(numValues: numValues, data: data, squaredData: squaredData, parameters: parameters)
             
             // mStep
             let expLogResp = logResp.map { exp($0) }
-            parameters = estimateGaussianParameters(numValues: numValues, data: data, resp: expLogResp, regCovar: regCovar)
+            parameters = try estimateGaussianParameters(numValues: numValues, data: data, resp: expLogResp, regCovar: regCovar)
             lowerBound = logProbNorm
             
             let change = lowerBound - prevLowerBound
@@ -113,14 +121,14 @@ public struct GaussianMixture {
             iteration += 1
         }
         
-        let (_, logResp) = eStep(numValues: numValues, data: data, squaredData: squaredData, parameters: parameters)
+        let (_, logResp) = try eStep(numValues: numValues, data: data, squaredData: squaredData, parameters: parameters)
         let assignedValues = (0..<numValues).map {
             Int(vDSP.indexOfMaximum(logResp[$0 * numClusters..<($0 + 1) * numClusters]).0)
         }
         return .init(gmm: self, converged: converged, lowerBound: lowerBound, numIterations: iteration, parameters: parameters, assignedValues: assignedValues)
     }
     
-    func estimateGaussianParameters(numValues: Int, data: [Float], resp: [Float], regCovar: Float) -> GaussianParameters {
+    func estimateGaussianParameters(numValues: Int, data: [Float], resp: [Float], regCovar: Float) throws -> GaussianParameters {
         // Calculate weights
         let weights = Array<Float>(unsafeUninitializedCapacity: numClusters, initializingWith: { buffer, initializedCount in
             resp.withUnsafeBufferPointer { ptr in
@@ -140,6 +148,8 @@ public struct GaussianMixture {
         // Calculate means
         var means = Array(repeating: Float(0), count: numDimensions * numClusters)
         
+        try Task.checkCancellation()
+
         // means = resp.transpose x data
         cblas_sgemm(
             CblasRowMajor,        // C Style
@@ -156,7 +166,9 @@ public struct GaussianMixture {
             1.0,                  // beta
             &means,               // C
             Int32(numDimensions)) // The size of the first dimension of matrix C
-        
+
+        try Task.checkCancellation()
+
         // means /= weights
         means.withUnsafeMutableBufferPointer { ptr in
             for (index, var weight) in weights.enumerated() {
@@ -193,6 +205,8 @@ public struct GaussianMixture {
             &avgData2,            // C
             Int32(numDimensions)) // The size of the first dimension of matrix C
         
+        try Task.checkCancellation()
+
         // avgData2 /= weights
         avgData2.withUnsafeMutableBufferPointer { ptr in
             for (index, var weight) in weights.enumerated() {
@@ -211,7 +225,7 @@ public struct GaussianMixture {
         return .init(weights: weights, means: means, covariances: covariances, precisionsCholesky: precisionsCholesky)
     }
     
-    func eStep(numValues: Int, data: [Float], squaredData: [Float], parameters: GaussianParameters) -> (logProbNormMean: Float, logResp: [Float]) {
+    func eStep(numValues: Int, data: [Float], squaredData: [Float], parameters: GaussianParameters) throws -> (logProbNormMean: Float, logResp: [Float]) {
         let logPrecisionsCholesky = parameters.precisionsCholesky.map { log($0) }
         let logDet = Array<Float>(unsafeUninitializedCapacity: numClusters) { buffer, initializedCount in
             logPrecisionsCholesky.withUnsafeBufferPointer { ptr in
@@ -243,6 +257,8 @@ public struct GaussianMixture {
             initializedCount = numClusters
         }
 
+        try Task.checkCancellation()
+
         // logProb = for each value, the sum of means^2 * precisions for each cluster
         var logProb = Array<Float>(unsafeUninitializedCapacity: numValues * numClusters) { buffer, initializedCount in
             means2PrecisionsSum.withUnsafeBufferPointer { ptr in
@@ -269,6 +285,8 @@ public struct GaussianMixture {
             1.0,                  // beta
             &logProb,             // C
             Int32(numClusters))   // The size of the first dimension of matrix C
+
+        try Task.checkCancellation()
 
         // then logProb = X^2 x precisions.T + logProb
         cblas_sgemm(

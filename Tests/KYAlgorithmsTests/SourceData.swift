@@ -37,10 +37,11 @@ func generateData(using centers: [[Float]], numValues: Int, radius: Float = 1.0)
         initializedCount = 4
     }
     
-    return .init(unsafeUninitializedCapacity: Int(n)) { buffer, count in
+    return try .init(unsafeUninitializedCapacity: Int(n)) { buffer, count in
         slarnv_(&d, &seed, &n, buffer.baseAddress)
         var current = 0
         for (index, center) in centers.enumerated() {
+            try Task.checkCancellation()
             let size = index < centers.count - 1 ? each_center : each_center + extra_center
             for _ in 0..<size {
                 for value in center {
