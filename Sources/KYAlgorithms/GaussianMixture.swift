@@ -317,7 +317,7 @@ public struct GaussianMixture {
             for i in 0..<numValues {
                 let sumExp = weightedLogProb[i * numClusters..<(i + 1) * numClusters]
                     .map { exp($0) }
-                    .reduce(0, +)
+                    .reduce(Float.leastNonzeroMagnitude, +) // avoid infinite values
                 buffer[i] = log(sumExp)
             }
             initializedCount = numValues
