@@ -69,12 +69,19 @@ final class GaussianMixtureTests: XCTestCase {
         let gmm = try GaussianMixture(numClusters: numClusters, numDimensions: numDimensions)
         let exp = expectation(description: "Finished")
         Task {
-            let result = try await gmm.fit(numValues: numValues, data: values,  maxIterations: 400, tolerance: 1e-4)
-            let sortedValues = zip(result.means, result.covariances).sorted(by: { lhs, rhs in lhs < rhs })
-            let means = sortedValues.map { $0.0 }
-            let covariances = sortedValues.map { $0.1 }
-            print(means)
-            print(covariances)
+            let result = try await gmm.fit(numValues: numValues, data: values, repetitions: 1, maxIterations: 400, tolerance: 1e-4)
+            print("Weights")
+            print(result.weights)
+
+            print("Means")
+            for i in 0..<numClusters {
+                print(result.means[i * numDimensions..<(i + 1) * numDimensions])
+            }
+            
+            print("Covariances")
+            for i in 0..<numClusters {
+                print(result.covariances[i * numDimensions..<(i + 1) * numDimensions])
+            }
             exp.fulfill()
         }
         wait(for: [exp])

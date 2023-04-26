@@ -29,7 +29,7 @@ func generateData(using centers: [[Float]], numValues: Int, radius: Float = 1.0)
 
     var n: Int32 = Int32(numValues * numDimensions)
     var d: Int32 = 3 // 3 for Normal(0, 1)
-    var seed = [Int32](unsafeUninitializedCapacity: 4) { buffer, initializedCount in
+    var seed = Array<Int32>(unsafeUninitializedCapacity: 4) { buffer, initializedCount in
         for i in 0..<3 {
             buffer[i] = Int32(arc4random_uniform(4096))
         }

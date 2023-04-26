@@ -16,6 +16,10 @@ final class CancellingTests: XCTestCase {
 
         let exp = expectation(description: "Finished")
         let gmmTask = Task {
+            defer {
+                exp.fulfill()
+            }
+            
             do {
                 print("Generating data...")
                 let values = try generateData(using: centers, numValues: numValues, radius: 100.0)
@@ -27,10 +31,9 @@ final class CancellingTests: XCTestCase {
                 let covariances = sortedValues.map { $0.1 }
                 print(means)
                 print(covariances)
-            } catch {
-                print("Error catched!")
+            } catch is CancellationError {
+                print("Cancelled!")
             }
-            exp.fulfill()
         }
         
         Task {

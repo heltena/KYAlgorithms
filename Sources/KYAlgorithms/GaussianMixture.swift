@@ -69,7 +69,7 @@ public struct GaussianMixture {
         self.numDimensions = numDimensions
     }
    
-    public func fit(numValues: Int, data: [Float], repetitions: Int = 1, maxIterations: Int = 100, tolerance: Float = 1e-3, verbose: Bool = false) async throws -> FitResult {
+    public func fit(numValues: Int, data: [Float], repetitions: Int = 1, maxIterations: Int = 100, tolerance: Float = 1e-3, regCovar: Float = 1e-6, verbose: Bool = false) async throws -> FitResult {
         guard numValues > 0 else { throw ClusteringError.inputParameter("numValues") }
         guard data.count >= numValues * numDimensions else { throw ClusteringError.inputParameter("data count") }
         guard repetitions > 0 else { throw ClusteringError.inputParameter("repetitions") }
@@ -78,7 +78,7 @@ public struct GaussianMixture {
         var bestResult: FitResult?
         let squaredData = vDSP.square(data)
         for _ in 0..<repetitions {
-            let result = try await singleFit(numValues: numValues, data: data, squaredData: squaredData, maxIterations: maxIterations, tolerance: tolerance, verbose: verbose)
+            let result = try await singleFit(numValues: numValues, data: data, squaredData: squaredData, maxIterations: maxIterations, tolerance: tolerance, regCovar: regCovar, verbose: verbose)
             if let previousResult = bestResult {
                 if previousResult.lowerBound < result.lowerBound {
                     bestResult = result
@@ -90,7 +90,7 @@ public struct GaussianMixture {
         return bestResult!
     }
 
-    func singleFit(numValues: Int, data: [Float], squaredData: [Float], maxIterations: Int = 100, tolerance: Float = 1e-3, regCovar: Float = 1e-6, verbose: Bool = false) async throws -> FitResult {
+    func singleFit(numValues: Int, data: [Float], squaredData: [Float], maxIterations: Int, tolerance: Float, regCovar: Float, verbose: Bool) async throws -> FitResult {
         let kmeans = try KMeans(numClusters: numClusters, numDimensions: numDimensions)
         let initialFit = try await kmeans.fit(numValues: numValues, data: data)
         var resp = Array(repeating: Float(0), count: numValues * numClusters)
@@ -99,6 +99,7 @@ public struct GaussianMixture {
         }
 
         var parameters = try estimateGaussianParameters(numValues: numValues, data: data, resp: resp, regCovar: regCovar)
+        parameters.weights = parameters.weights.map { $0 / Float(numValues) }
 
         var converged = false
         var lowerBound = -Float.infinity
@@ -111,6 +112,8 @@ public struct GaussianMixture {
             // mStep
             let expLogResp = logResp.map { exp($0) }
             parameters = try estimateGaussianParameters(numValues: numValues, data: data, resp: expLogResp, regCovar: regCovar)
+            let weightSum = parameters.weights.reduce(0, +)
+            parameters.weights = parameters.weights.map { $0 / weightSum }
             lowerBound = logProbNorm
             
             let change = lowerBound - prevLowerBound

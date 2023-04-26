@@ -24,7 +24,7 @@ public struct KMeans {
         }
         
         public func predict(numValues: Int, data: [Float]) -> [Int] {
-            var result = [Int](unsafeUninitializedCapacity: numValues) { buffer, initializedCount in
+            var result = Array<Int>(unsafeUninitializedCapacity: numValues) { buffer, initializedCount in
                 initializedCount = numValues
             }
             kmeans.assignValues(numValues: numValues, data: data, centroids: centroids, assignedValues: &result)
@@ -45,7 +45,7 @@ public struct KMeans {
         guard maxIterations > 0 else { throw ClusteringError.inputParameter("maxIterations") }
     
         let adaptedTolerance = dataVariance(numValues: numValues, data: data) * tolerance
-        var assignedValues = [Int](unsafeUninitializedCapacity: numValues) { buffer, initializedCount in
+        var assignedValues = Array<Int>(unsafeUninitializedCapacity: numValues) { buffer, initializedCount in
             initializedCount = numValues
         }
         var centroids = kmeansPlusPlus(numValues: numValues, data: data)
@@ -164,7 +164,7 @@ public struct KMeans {
         let numChunks = numValues.isMultiple(of: numItemInChunks) ? numValues / numItemInChunks : (numValues / numItemInChunks) + 1
         let remain = numValues.isMultiple(of: numItemInChunks) ? 0 : numValues - (numChunks - 1) * numItemInChunks
         var sums = Array(repeating: Float(0), count: numChunks * numClusters)
-        let partialSums = [Float](unsafeUninitializedCapacity: numChunks * numClusters * numDimensions) { buffer, initializedCount in
+        let partialSums = Array<Float>(unsafeUninitializedCapacity: numChunks * numClusters * numDimensions) { buffer, initializedCount in
             DispatchQueue.concurrentPerform(iterations: numChunks) { iteration in
                 let size = iteration < numChunks - 1 ? numItemInChunks : remain
                 var counts = Array(repeating: Int(0), count: numClusters)
