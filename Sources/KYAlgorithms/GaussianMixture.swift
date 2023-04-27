@@ -69,7 +69,7 @@ public struct GaussianMixture {
         self.numDimensions = numDimensions
     }
    
-    public func fit(numValues: Int, data: [Float], repetitions: Int = 1, maxIterations: Int = 100, tolerance: Float = 1e-3, regCovar: Float = 1e-6, verbose: Bool = false) async throws -> FitResult {
+    public func fit(numValues: Int, data: [Float], repetitions: Int = 1, maxIterations: Int = 100, tolerance: Float = 1e-3, regCovar: Float = 1e-6, verbose: Bool = false, initialResp: [Float]? = nil) async throws -> FitResult {
         guard numValues > 0 else { throw ClusteringError.inputParameter("numValues") }
         guard data.count >= numValues * numDimensions else { throw ClusteringError.inputParameter("data count") }
         guard repetitions > 0 else { throw ClusteringError.inputParameter("repetitions") }
@@ -78,7 +78,7 @@ public struct GaussianMixture {
         var bestResult: FitResult?
         let squaredData = vDSP.square(data)
         for _ in 0..<repetitions {
-            let result = try await singleFit(numValues: numValues, data: data, squaredData: squaredData, maxIterations: maxIterations, tolerance: tolerance, regCovar: regCovar, verbose: verbose)
+            let result = try await singleFit(numValues: numValues, data: data, squaredData: squaredData, maxIterations: maxIterations, tolerance: tolerance, regCovar: regCovar, verbose: verbose, initialResp: initialResp)
             if let previousResult = bestResult {
                 if previousResult.lowerBound < result.lowerBound {
                     bestResult = result
@@ -90,14 +90,19 @@ public struct GaussianMixture {
         return bestResult!
     }
 
-    func singleFit(numValues: Int, data: [Float], squaredData: [Float], maxIterations: Int, tolerance: Float, regCovar: Float, verbose: Bool) async throws -> FitResult {
-        let kmeans = try KMeans(numClusters: numClusters, numDimensions: numDimensions)
-        let initialFit = try await kmeans.fit(numValues: numValues, data: data)
-        var resp = Array(repeating: Float(0), count: numValues * numClusters)
-        for (value, cluster) in initialFit.assignedValues.enumerated() {
-            resp[value * numClusters + cluster] = 1.0
+    func singleFit(numValues: Int, data: [Float], squaredData: [Float], maxIterations: Int, tolerance: Float, regCovar: Float, verbose: Bool, initialResp: [Float]?) async throws -> FitResult {
+        var resp: [Float]
+        if let initialResp {
+            resp = initialResp
+        } else {
+            let kmeans = try KMeans(numClusters: numClusters, numDimensions: numDimensions)
+            let initialFit = try await kmeans.fit(numValues: numValues, data: data)
+            resp = Array(repeating: Float(0), count: numValues * numClusters)
+            for (value, cluster) in initialFit.assignedValues.enumerated() {
+                resp[value * numClusters + cluster] = 1.0
+            }
         }
-
+        
         var parameters = try estimateGaussianParameters(numValues: numValues, data: data, resp: resp, regCovar: regCovar)
         parameters.weights = parameters.weights.map { $0 / Float(numValues) }
 
@@ -112,7 +117,10 @@ public struct GaussianMixture {
             // mStep
             let expLogResp = logResp.map { exp($0) }
             parameters = try estimateGaussianParameters(numValues: numValues, data: data, resp: expLogResp, regCovar: regCovar)
-            let weightSum = parameters.weights.reduce(0, +)
+
+            var weightSum = Float(0)
+            vDSP_sve(parameters.weights, 1, &weightSum, vDSP_Length(parameters.weights.count))
+            
             parameters.weights = parameters.weights.map { $0 / weightSum }
             lowerBound = logProbNorm
             
@@ -141,16 +149,16 @@ public struct GaussianMixture {
                         ptr.baseAddress!.advanced(by: cluster),
                         vDSP_Stride(numClusters),
                         &result,
-                        vDSP_Length(resp.count / numClusters))
+                        vDSP_Length(resp.count/numClusters))
                     buffer[cluster] = result + Float.leastNonzeroMagnitude * 10 // make sure is not zero
                 }
             }
             initializedCount = numClusters
         })
-
+        
         // Calculate means
         var means = Array(repeating: Float(0), count: numDimensions * numClusters)
-        
+
         try Task.checkCancellation()
 
         // means = resp.transpose x data
@@ -166,7 +174,7 @@ public struct GaussianMixture {
             Int32(numClusters),   // The size of the first dimension of matrix A
             data,                 // B
             Int32(numDimensions), // The size of the first dimension of matrix B
-            1.0,                  // beta
+            0.0,                  // beta
             &means,               // C
             Int32(numDimensions)) // The size of the first dimension of matrix C
 
@@ -190,7 +198,7 @@ public struct GaussianMixture {
         let means2 = vDSP.square(means)
         
         var avgData2 = Array(repeating: Float(0), count: numDimensions * numClusters)
-        
+
         // avgData2 = resp.transpose x data ^ 2
         cblas_sgemm(
             CblasRowMajor,        // C Style
@@ -244,7 +252,6 @@ public struct GaussianMixture {
         }
         let precisions = vDSP.square(parameters.precisionsCholesky)
         
-        let meansPrecisions = vDSP.multiply(parameters.means, precisions)
         let means2 = vDSP.square(parameters.means)
         let means2Precisions = vDSP.multiply(means2, precisions)
         let means2PrecisionsSum = Array<Float>(unsafeUninitializedCapacity: numClusters) { buffer, initializedCount in
@@ -261,8 +268,9 @@ public struct GaussianMixture {
         }
 
         try Task.checkCancellation()
-
+        
         // logProb = for each value, the sum of means^2 * precisions for each cluster
+        // logProb = np.sum((means**2 * precisions), 1)
         var logProb = Array<Float>(unsafeUninitializedCapacity: numValues * numClusters) { buffer, initializedCount in
             means2PrecisionsSum.withUnsafeBufferPointer { ptr in
                 for value in 0..<numValues {
@@ -273,6 +281,7 @@ public struct GaussianMixture {
         }
                              
         // logProb = -2 * (X x (means * precisions).T) + logProb
+        let meansPrecisions = vDSP.multiply(parameters.means, precisions)
         cblas_sgemm(
             CblasRowMajor,        // C Style
             CblasNoTrans,         // data is not transpose
@@ -308,20 +317,22 @@ public struct GaussianMixture {
             &logProb,             // C
             Int32(numClusters))   // The size of the first dimension of matrix C
         
-        // weightedLogProb = -0.5 * (numClusters * log(2 * pi) + logProb) + logDet
-        let weightedLogProb = Array<Float>(unsafeUninitializedCapacity: numValues * numClusters) { buffer, initializedCount in
+        // weightedLogProb = -0.5 * (numClusters * log(2 * pi) + logProb) + logDet + log(weights)
+        let weightedLogProb = Array<Double>(unsafeUninitializedCapacity: numValues * numClusters) { buffer, initializedCount in
             for i in 0..<numValues * numClusters {
-                buffer[i] = -0.5 * (Float(numClusters) * log(2 * Float.pi) + logProb[i]) + logDet[i % numClusters] + log(parameters.weights[i % numClusters])
+                buffer[i] = Double(-0.5 * (Float(numDimensions) * log(2 * Float.pi) + logProb[i]) + logDet[i % numClusters] + log(parameters.weights[i % numClusters]))
             }
             initializedCount = numValues * numClusters
         }
-        
+               
         let logProbNorm = Array<Float>(unsafeUninitializedCapacity: numValues) { buffer, initializedCount in
             for i in 0..<numValues {
-                let sumExp = weightedLogProb[i * numClusters..<(i + 1) * numClusters]
-                    .map { exp($0) }
-                    .reduce(Float.leastNonzeroMagnitude, +) // avoid infinite values
-                buffer[i] = log(sumExp)
+                let data = weightedLogProb[i * numClusters..<(i + 1) * numClusters]
+                let maxValue = vDSP.maximum(data)
+                let expAdaptedData = data.map { exp($0 - maxValue) }
+                var sum = Double(0)
+                vDSP_sveD(expAdaptedData, 1, &sum, vDSP_Length(expAdaptedData.count))
+                buffer[i] = Float(log(sum == 0 ? Double.leastNormalMagnitude : sum) + maxValue)
             }
             initializedCount = numValues
         }
@@ -330,11 +341,11 @@ public struct GaussianMixture {
 
         let logResp = Array<Float>(unsafeUninitializedCapacity: numValues * numClusters) { buffer, initializedCount in
             for i in 0..<numValues*numClusters {
-                buffer[i] = weightedLogProb[i] - logProbNorm[i / numClusters]
+                buffer[i] = Float(weightedLogProb[i]) - logProbNorm[i / numClusters]
             }
             initializedCount = numValues * numClusters
         }
+        
         return (logProbNormMean: logProbNormMean, logResp: logResp)
     }
-
 }
