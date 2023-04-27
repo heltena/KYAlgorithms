@@ -119,7 +119,7 @@ public struct KMeans {
     
     public func assignValues(numValues: Int, data: [Float], centroids: [[Float]], assignedValues: inout [Int]) {
         let flattenCentroids = centroids.flatMap { $0 }
-        let squaredCentroidSum: [Float] = centroids.map { vDSP.square($0).reduce(0, +) }
+        let squaredCentroidSum = centroids.map { vDSP.sumOfSquares($0) }
         let currentNumClusters = centroids.count // This function is uses at kmeansPlusPlus and need to partial assign the values
         
         // Init matrix as: M[i,j] = sum of the squared components of centroid[j]

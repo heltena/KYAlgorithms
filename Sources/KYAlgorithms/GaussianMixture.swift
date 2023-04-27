@@ -104,8 +104,8 @@ public struct GaussianMixture {
         }
         
         var parameters = try estimateGaussianParameters(numValues: numValues, data: data, resp: resp, regCovar: regCovar)
-        parameters.weights = parameters.weights.map { $0 / Float(numValues) }
-
+        parameters.weights = vDSP.multiply(1/Float(numValues), parameters.weights)
+        
         var converged = false
         var lowerBound = -Float.infinity
         var iteration = 0
@@ -115,13 +115,14 @@ public struct GaussianMixture {
             let (logProbNorm, logResp) = try eStep(numValues: numValues, data: data, squaredData: squaredData, parameters: parameters)
             
             // mStep
-            let expLogResp = logResp.map { exp($0) }
+            let expLogResp = vForce.exp(logResp)
+
             parameters = try estimateGaussianParameters(numValues: numValues, data: data, resp: expLogResp, regCovar: regCovar)
 
             var weightSum = Float(0)
             vDSP_sve(parameters.weights, 1, &weightSum, vDSP_Length(parameters.weights.count))
             
-            parameters.weights = parameters.weights.map { $0 / weightSum }
+            parameters.weights = vDSP.multiply(1/weightSum, parameters.weights)
             lowerBound = logProbNorm
             
             let change = lowerBound - prevLowerBound
@@ -232,12 +233,12 @@ public struct GaussianMixture {
         }
 
         let covariances = vDSP.add(regCovar, vDSP.subtract(avgData2, means2))
-        let precisionsCholesky = covariances.map { 1.0 / sqrt($0) }
+        let precisionsCholesky = vForce.rsqrt(covariances)
         return .init(weights: weights, means: means, covariances: covariances, precisionsCholesky: precisionsCholesky)
     }
     
     func eStep(numValues: Int, data: [Float], squaredData: [Float], parameters: GaussianParameters) throws -> (logProbNormMean: Float, logResp: [Float]) {
-        let logPrecisionsCholesky = parameters.precisionsCholesky.map { log($0) }
+        let logPrecisionsCholesky = vForce.log(parameters.precisionsCholesky)
         let logDet = Array<Float>(unsafeUninitializedCapacity: numClusters) { buffer, initializedCount in
             logPrecisionsCholesky.withUnsafeBufferPointer { ptr in
                 for cluster in 0..<numClusters {
@@ -329,7 +330,7 @@ public struct GaussianMixture {
             for i in 0..<numValues {
                 let data = weightedLogProb[i * numClusters..<(i + 1) * numClusters]
                 let maxValue = vDSP.maximum(data)
-                let expAdaptedData = data.map { exp($0 - maxValue) }
+                let expAdaptedData = vForce.exp(vDSP.add(-maxValue, data))
                 var sum = Double(0)
                 vDSP_sveD(expAdaptedData, 1, &sum, vDSP_Length(expAdaptedData.count))
                 buffer[i] = Float(log(sum == 0 ? Double.leastNormalMagnitude : sum) + maxValue)
