@@ -12,7 +12,7 @@ struct DataFile: Codable {
 }
 
 func loadData(from resource: String) throws -> DataFile {
-    let decoder = JSONDecoder()
+    let decoder = JSONDecoder.Rainflow()
     let url = try XCTUnwrap(Bundle.module.url(forResource: resource, withExtension: "json"))
     let data = try Data(contentsOf: url)
     return try decoder.decode(DataFile.self, from: data)

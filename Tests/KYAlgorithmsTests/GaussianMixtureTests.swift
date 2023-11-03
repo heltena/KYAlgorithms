@@ -95,7 +95,7 @@ final class GaussianMixtureTests: XCTestCase {
         }
         let url = try XCTUnwrap(Bundle.module.url(forResource: "to_gmm_kmeans_data", withExtension: "json"))
         let data = try Data(contentsOf: url)
-        let decoder = JSONDecoder()
+        let decoder = JSONDecoder.Rainflow()
         let info = try decoder.decode(LoadingData.self, from: data)
         
         let numDimensions = 10

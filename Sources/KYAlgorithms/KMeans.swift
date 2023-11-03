@@ -80,7 +80,13 @@ public struct KMeans {
             var variance: Float = 0.0
             data.withUnsafeBytes { ptr in
                 let x = ptr.bindMemory(to: Float.self)
-                vDSP_normalize(x.baseAddress! + i, numDimensions, nil, 1, &mn, &sddev, vDSP_Length(numValues))
+                vDSP_normalize(
+                    x.baseAddress! + i,
+                    numDimensions,
+                    nil, 1,
+                    &mn,
+                    &sddev,
+                    vDSP_Length(numValues / numDimensions))
                 variance = sddev * sddev
                 variances.append(variance)
             }
@@ -158,10 +164,14 @@ public struct KMeans {
     }
 
     public func recalculateCentroids(numValues: Int, data: [Float], centroids: [[Float]], assignations: [Int]) -> [[Float]] {
+        // TODO: NOT WORKING WHEN numValues < numProcessors
         // Could not find a vectorized operation to find the mean of the values using a mask
-        let numProcessors = ProcessInfo.processInfo.activeProcessorCount
+        let numProcessors = max(1, ProcessInfo.processInfo.activeProcessorCount)
         let numItemInChunks = numValues / numProcessors
-        let numChunks = numValues.isMultiple(of: numItemInChunks) ? numValues / numItemInChunks : (numValues / numItemInChunks) + 1
+        let numChunks = max(1, numValues.isMultiple(of: numItemInChunks) ? numValues / numItemInChunks : (numValues / numItemInChunks) + 1)
+        if (numValues.isMultiple(of: numItemInChunks) ? numValues / numItemInChunks : (numValues / numItemInChunks) + 1) == 0 {
+            print("Warning!")
+        }
         let remain = numValues.isMultiple(of: numItemInChunks) ? 0 : numValues - (numChunks - 1) * numItemInChunks
         var sums = Array(repeating: Float(0), count: numChunks * numClusters)
         let partialSums = Array<Float>(unsafeUninitializedCapacity: numChunks * numClusters * numDimensions) { buffer, initializedCount in
