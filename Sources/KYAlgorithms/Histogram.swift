@@ -64,7 +64,7 @@ public struct Histogram {
         self.channels = channels
     }
     
-    public init(kind: Kind, values: [Float], useLog10: Bool, binsCount: Int) throws {
+    public init(kind: Kind, useLog10: Bool, binsCount: Int, values: [Float]) throws {
         var data = Array(repeating: 0, count: binsCount)
         let buffer = useLog10
             ? values.filter { $0 >= 1.0 }.map { log10($0) }
@@ -102,7 +102,7 @@ public struct Histogram {
     
     /// values contains the channel values interlined:
     ///   Ch0V0 Ch1V0 Ch2V0  Ch0V1 Ch1V1 Ch2V1  Ch0V2 Ch2V2 Ch3V2  ...
-    public init(kind: Kind, values: [Float], orderedChannelNames: [String], useLog10: Bool, binsCount: Int) throws {
+    public init(kind: Kind, useLog10: Bool, binsCount: Int, values: [Float], orderedChannelNames: [String]) throws {
         guard
             binsCount > 0,
             values.count >= 2 * orderedChannelNames.count,
@@ -141,21 +141,23 @@ public struct Histogram {
             let histogramValues = (0..<binsCount)
                 .map { data[$0 * orderedChannelNames.count + channelIndex] }
             
-            let maxFrequency = histogramValues.max() ?? 0
-            
             let factor: Float
             switch kind {
             case .raw:
                 factor = 1.0
             case .density:
-                factor = (maxValue - minValue) * step / Float(valuesCount)
+//                factor = (maxValue - minValue) * step / Float(valuesCount)
+//                  factor = (Float(valuesCount) * (maxValue - minValue)) / Float(binsCount)
+                factor = 1 / (Float(valuesCount) * step)
             }
             
-            let elements = histogramValues.enumerated().map { offset, element in
-                Element(id: offset, x: step * (Float(offset) + 0.5), frequency: Float(element) * factor)
+            let elements = histogramValues.enumerated().map { offset, value in
+                Element(id: offset, x: minValue + step * (Float(offset) + 0.5), frequency: Float(value) * factor)
             }
             
-            let channel = Channel(id: UUID(), name: channelName, elements: elements, minXValue: minValue, maxXValue: maxValue, maxFrequency: Float(maxFrequency), xStep: step)
+            let maxFrequency = Float(histogramValues.max() ?? 0) * factor
+
+            let channel = Channel(id: UUID(), name: channelName, elements: elements, minXValue: minValue, maxXValue: maxValue, maxFrequency: maxFrequency, xStep: step)
             channels.append(channel)
         }
 
